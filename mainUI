@@ -5326,7 +5326,7 @@ function MacLib:Window(Settings)
 		onUnloadCallback = callback
 	end
 
-	local MenuKeybind = ResolveKeyCode(Settings.Keybind, Enum.KeyCode.Leftcontrol)
+	local MenuKeybind = ResolveKeyCode(Settings.Keybind, Enum.KeyCode.LeftControl)
 	local MinimizeKeybind = ResolveKeyCode(Settings.MinimizeKeybind, MenuKeybind)
 	local minimizeKeybindChangedCallbacks = {}
 
@@ -5409,8 +5409,8 @@ function MacLib:Window(Settings)
 	function WindowFunctions:BindMinimizeKeybindDropdown(section, dropdownSettings)
 		dropdownSettings = dropdownSettings or {}
 		local keyOptions = dropdownSettings.Options or {
-			"Leftcontrol",
-			"Leftcontrol",
+			"LeftControl",
+			"LeftControl",
 			"RightShift",
 			"Insert",
 			"End",
@@ -5768,8 +5768,8 @@ function MacLib:Demo()
 		DragStyle = 1,
 		DisabledWindowControls = {},
 		ShowUserInfo = true,
-		Keybind = Enum.KeyCode.Leftcontrol,
-		MinimizeKeybind = Enum.KeyCode.Leftcontrol,
+		Keybind = Enum.KeyCode.LeftControl,
+		MinimizeKeybind = Enum.KeyCode.LeftControl,
 		AcrylicBlur = true,
 	})
 
@@ -5853,8 +5853,8 @@ function MacLib:Demo()
 		Name = "Minimize Keybind",
 		Default = Window:GetMinimizeKeybind().Name,
 		Options = {
-			"Leftcontrol",
-			"Leftcontrol",
+			"LeftControl",
+			"LeftControl",
 			"RightShift",
 			"LeftShift",
 			"Insert",
@@ -5924,9 +5924,9 @@ function MacLib:Demo()
 	})
 
 	sections.MiscPreset:Button({
-		Name = "Reset Minimize Keybind (Leftcontrol)",
+		Name = "Reset Minimize Keybind (LeftControl)",
 		Callback = function()
-			Window:SetMinimizeKeybind(Enum.KeyCode.Leftcontrol)
+			Window:SetMinimizeKeybind(Enum.KeyCode.LeftControl)
 		end,
 	})
 
