@@ -5410,7 +5410,7 @@ function MacLib:Window(Settings)
 		dropdownSettings = dropdownSettings or {}
 		local keyOptions = dropdownSettings.Options or {
 			"RightControl",
-			"Leftcontrol",
+			"LeftControl",
 			"RightShift",
 			"Insert",
 			"End",
@@ -5854,7 +5854,7 @@ function MacLib:Demo()
 		Default = Window:GetMinimizeKeybind().Name,
 		Options = {
 			"RightControl",
-			"RightControl",
+			"LeftControl",
 			"RightShift",
 			"LeftShift",
 			"Insert",
