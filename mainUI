@@ -90,6 +90,72 @@ local function ResolveKeyCode(keyInput, fallback)
 	return fallback
 end
 
+--// Responsive Helpers
+local function GetScale(uiScale)
+	return math.max(uiScale.Scale, 0.01)
+end
+
+-- Batasi lebar nama elemen supaya tidak menabrak kontrol di kanan saat canvas kecil
+local function LimitNameWidth(row, label, reservedWidth, uiScale)
+	local constraint = Instance.new("UISizeConstraint")
+	constraint.Name = "NameUISizeConstraint"
+	constraint.Parent = label
+
+	local function refresh()
+		local rowWidth = row.AbsoluteSize.X / GetScale(uiScale)
+		if rowWidth > 0 then
+			constraint.MaxSize = Vector2.new(math.max(40, rowWidth - reservedWidth), math.huge)
+		end
+	end
+
+	row:GetPropertyChangedSignal("AbsoluteSize"):Connect(refresh)
+	refresh()
+end
+
+-- Dua kolom saat lebar cukup, satu kolom saat sempit
+local function BindResponsiveColumns(holder, layout, left, right, uiScale)
+	local function refresh()
+		local width = holder.AbsoluteSize.X / GetScale(uiScale)
+		if width <= 0 then return end
+
+		local singleColumn = width < 420
+		layout.FillDirection = singleColumn and Enum.FillDirection.Vertical or Enum.FillDirection.Horizontal
+
+		local columnSize = singleColumn and UDim2.fromScale(1, 0) or UDim2.new(0.5, -10, 0, 0)
+		left.Size = columnSize
+		right.Size = columnSize
+	end
+
+	holder:GetPropertyChangedSignal("AbsoluteSize"):Connect(refresh)
+	refresh()
+end
+
+-- Skala popup (dialog / color picker) agar selalu muat di dalam canvas
+local function GetPromptFit(canvas, prompt, baseScale, promptScale)
+	local outer = GetScale(baseScale)
+	local total = outer * GetScale(promptScale)
+	local promptSize = prompt.AbsoluteSize / total
+	local canvasSize = canvas.AbsoluteSize / outer
+
+	if promptSize.X <= 0 or promptSize.Y <= 0 or canvasSize.X <= 0 or canvasSize.Y <= 0 then
+		return 1
+	end
+
+	return math.clamp(math.min((canvasSize.X - 24) / promptSize.X, (canvasSize.Y - 24) / promptSize.Y), 0.1, 1)
+end
+
+local function IsModalOpen(canvas)
+	for _, child in ipairs(canvas:GetChildren()) do
+		if child.Name == "Dialog" or child.Name == "DialogCanvas" or child.Name == "ColorPickerCanvas" then
+			return true
+		end
+		if child.Name == "ColorPicker" and child.Visible then
+			return true
+		end
+	end
+	return false
+end
+
 --// Library Functions
 function MacLib:Window(Settings)
 	Settings = Settings or {}
@@ -678,62 +744,90 @@ function MacLib:Window(Settings)
 	content.BorderColor3 = Color3.fromRGB(0, 0, 0)
 	content.BorderSizePixel = 0
 	content.Position = UDim2.fromScale(1, 4.69e-08)
-	content.Size = UDim2.new(0, (base.AbsoluteSize.X - sidebar.AbsoluteSize.X), 1, 0)
+	--// Sidebar + Content otomatis mengikuti ukuran canvas
+	do
+		local defaultRatio = 0.325
+		local sidebarRatio = defaultRatio
+		local minSidebarWidth = 107
+		local minContentWidth = 200
+		local snapRange = 20
+		local resizingContent = false
+		local initialMouseX, initialSidebarWidth
 
-	local resizingContent = false
-	local defaultSidebarWidth = sidebar.AbsoluteSize.X
-	local initialMouseX, initialSidebarWidth
-	local snapRange = 20
-	local minSidebarWidth = 107
-	local maxSidebarWidth = base.AbsoluteSize.X - minSidebarWidth
+		local TweenSettings = {
+			DefaultTransparency = 0.9,
+			HoverTransparency = 0.85,
 
-	local TweenSettings = {
-		DefaultTransparency = 0.9,
-		HoverTransparency = 0.85,
+			EasingStyle = Enum.EasingStyle.Sine
+		}
 
-		EasingStyle = Enum.EasingStyle.Sine
-	}
-
-	local function ChangeState(State)
-		Tween(divider, TweenInfo.new(0.2, TweenSettings.EasingStyle), {
-			BackgroundTransparency = State == "Idle" and TweenSettings.DefaultTransparency or TweenSettings.HoverTransparency
-		}):Play()  
-	end
-
-	dividerInteract.MouseEnter:Connect(function()
-		ChangeState("Hover")
-	end)
-	dividerInteract.MouseLeave:Connect(function()
-		ChangeState("Idle")
-	end)
-
-	dividerInteract.MouseButton1Down:Connect(function()
-		resizingContent = true
-		initialMouseX = UserInputService:GetMouseLocation().X
-		initialSidebarWidth = sidebar.AbsoluteSize.X
-	end)
-
-	UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 then
-			resizingContent = false
+		local function getBaseWidth()
+			return base.AbsoluteSize.X / GetScale(baseUIScale)
 		end
-	end)
 
-	UserInputService.InputChanged:Connect(function(input)
-		if resizingContent and input.UserInputType == Enum.UserInputType.MouseMovement then
-			local deltaX = UserInputService:GetMouseLocation().X - initialMouseX
-			local newSidebarWidth = initialSidebarWidth + deltaX
+		local function clampSidebar(width, baseWidth)
+			return math.clamp(width, minSidebarWidth, math.max(minSidebarWidth, baseWidth - minContentWidth))
+		end
 
-			if math.abs(newSidebarWidth - defaultSidebarWidth) < snapRange then
-				newSidebarWidth = defaultSidebarWidth
-			else
-				newSidebarWidth = math.clamp(newSidebarWidth, minSidebarWidth, maxSidebarWidth)
+		local function applyLayout()
+			local baseWidth = getBaseWidth()
+			if baseWidth <= 0 then
+				sidebar.Size = UDim2.fromScale(sidebarRatio, 1)
+				content.Size = UDim2.fromScale(1 - sidebarRatio, 1)
+				return
 			end
 
-			sidebar.Size = UDim2.new(0, newSidebarWidth, 1, 0)
-			content.Size = UDim2.new(0, base.AbsoluteSize.X - newSidebarWidth, 1, 0)
+			local sidebarWidth = math.floor(clampSidebar(baseWidth * sidebarRatio, baseWidth) + 0.5)
+			sidebar.Size = UDim2.new(0, sidebarWidth, 1, 0)
+			content.Size = UDim2.new(1, -sidebarWidth, 1, 0)
 		end
-	end)
+
+		local function ChangeState(State)
+			Tween(divider, TweenInfo.new(0.2, TweenSettings.EasingStyle), {
+				BackgroundTransparency = State == "Idle" and TweenSettings.DefaultTransparency or TweenSettings.HoverTransparency
+			}):Play()  
+		end
+
+		dividerInteract.MouseEnter:Connect(function()
+			ChangeState("Hover")
+		end)
+		dividerInteract.MouseLeave:Connect(function()
+			ChangeState("Idle")
+		end)
+
+		dividerInteract.MouseButton1Down:Connect(function()
+			resizingContent = true
+			initialMouseX = UserInputService:GetMouseLocation().X
+			initialSidebarWidth = sidebar.AbsoluteSize.X / GetScale(baseUIScale)
+		end)
+
+		UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				resizingContent = false
+			end
+		end)
+
+		UserInputService.InputChanged:Connect(function(input)
+			if resizingContent and input.UserInputType == Enum.UserInputType.MouseMovement then
+				local baseWidth = getBaseWidth()
+				if baseWidth <= 0 then return end
+
+				local deltaX = (UserInputService:GetMouseLocation().X - initialMouseX) / GetScale(baseUIScale)
+				local newSidebarWidth = initialSidebarWidth + deltaX
+
+				if math.abs(newSidebarWidth - baseWidth * defaultRatio) < snapRange then
+					sidebarRatio = defaultRatio
+				else
+					sidebarRatio = clampSidebar(newSidebarWidth, baseWidth) / baseWidth
+				end
+
+				applyLayout()
+			end
+		end)
+
+		base:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyLayout)
+		applyLayout()
+	end
 
 	local topbar = Instance.new("Frame")
 	topbar.Name = "Topbar"
@@ -822,6 +916,7 @@ function MacLib:Window(Settings)
 	local startPos
 
 	local function update(input)
+		if base:GetAttribute("Resizing") then return end
 		local delta = input.Position - dragStart
 		base.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
 	end
@@ -953,6 +1048,143 @@ function MacLib:Window(Settings)
 	globalSettingsUIScale.Parent = globalSettings
 	globalSettings.Parent = base
 	base.Parent = macLib
+
+	--// Resize Handle (pojok kanan bawah)
+	do
+		local minSize = Settings.MinSize or Vector2.new(360, 260)
+
+		local resizeHandle = Instance.new("TextButton")
+		resizeHandle.Name = "ResizeHandle"
+		resizeHandle.Text = ""
+		resizeHandle.AutoButtonColor = false
+		resizeHandle.AnchorPoint = Vector2.new(1, 1)
+		resizeHandle.BackgroundTransparency = 1
+		resizeHandle.BorderSizePixel = 0
+		resizeHandle.Position = UDim2.new(1, -2, 1, -2)
+		resizeHandle.Size = UDim2.fromOffset(28, 28)
+		resizeHandle.ZIndex = 3
+		resizeHandle.Visible = Settings.Resizable ~= false
+
+		-- Logo grip: tiga garis diagonal, atau gambar sendiri lewat Settings.ResizeIcon
+		local gripParts = {}
+
+		if Settings.ResizeIcon then
+			local icon = Instance.new("ImageLabel")
+			icon.Name = "Icon"
+			icon.Image = Settings.ResizeIcon
+			icon.ImageTransparency = 0.5
+			icon.AnchorPoint = Vector2.new(1, 1)
+			icon.BackgroundTransparency = 1
+			icon.BorderSizePixel = 0
+			icon.Position = UDim2.new(1, -4, 1, -4)
+			icon.Size = UDim2.fromOffset(16, 16)
+			icon.Parent = resizeHandle
+			table.insert(gripParts, { object = icon, property = "ImageTransparency" })
+		else
+			for _, line in ipairs({ { center = 15, length = 20 }, { center = 18, length = 12 }, { center = 21, length = 4 } }) do
+				local grip = Instance.new("Frame")
+				grip.Name = "Grip"
+				grip.AnchorPoint = Vector2.new(0.5, 0.5)
+				grip.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+				grip.BackgroundTransparency = 0.5
+				grip.BorderSizePixel = 0
+				grip.Position = UDim2.fromOffset(line.center, line.center)
+				grip.Rotation = -45
+				grip.Size = UDim2.fromOffset(line.length, 2)
+
+				local gripCorner = Instance.new("UICorner")
+				gripCorner.CornerRadius = UDim.new(1, 0)
+				gripCorner.Parent = grip
+
+				grip.Parent = resizeHandle
+				table.insert(gripParts, { object = grip, property = "BackgroundTransparency" })
+			end
+		end
+
+		resizeHandle.Parent = base
+
+		local activeInput, moveConnection, endConnection
+		local hovering = false
+
+		local function refreshGrip()
+			local transparency = (activeInput and 0.05) or (hovering and 0.2) or 0.5
+			for _, part in ipairs(gripParts) do
+				Tween(part.object, TweenInfo.new(0.2, Enum.EasingStyle.Sine), {
+					[part.property] = transparency
+				}):Play()
+			end
+		end
+
+		local function stopResize()
+			if moveConnection then moveConnection:Disconnect() end
+			if endConnection then endConnection:Disconnect() end
+			moveConnection, endConnection, activeInput = nil, nil, nil
+			base:SetAttribute("Resizing", false)
+			refreshGrip()
+		end
+
+		local function startResize(input)
+			local isMouse = input.UserInputType == Enum.UserInputType.MouseButton1
+			if not isMouse and input.UserInputType ~= Enum.UserInputType.Touch then return end
+			if input.UserInputState ~= Enum.UserInputState.Begin then return end
+			if activeInput or IsModalOpen(base) then return end
+
+			local scale = GetScale(baseUIScale)
+			local startInput = input.Position
+			local startSize = base.AbsoluteSize / scale
+			local startPosition = base.Position
+			local minWidth = math.min(minSize.X, startSize.X)
+			local minHeight = math.min(minSize.Y, startSize.Y)
+
+			activeInput = input
+			base:SetAttribute("Resizing", true)
+			refreshGrip()
+
+			moveConnection = UserInputService.InputChanged:Connect(function(changed)
+				local sameInput = changed == activeInput
+					or (isMouse and changed.UserInputType == Enum.UserInputType.MouseMovement)
+				if not sameInput then return end
+
+				local delta = changed.Position - startInput
+				local width = math.floor(math.max(minWidth, startSize.X + delta.X / scale) + 0.5)
+				local height = math.floor(math.max(minHeight, startSize.Y + delta.Y / scale) + 0.5)
+
+				base.Size = UDim2.fromOffset(width, height)
+				-- AnchorPoint di tengah, jadi posisi digeser agar pojok kiri atas tetap diam
+				base.Position = UDim2.new(
+					startPosition.X.Scale, startPosition.X.Offset + (width - startSize.X) * scale / 2,
+					startPosition.Y.Scale, startPosition.Y.Offset + (height - startSize.Y) * scale / 2
+				)
+			end)
+
+			endConnection = UserInputService.InputEnded:Connect(function(ended)
+				if ended == activeInput or (isMouse and ended.UserInputType == Enum.UserInputType.MouseButton1) then
+					stopResize()
+				end
+			end)
+		end
+
+		resizeHandle.InputBegan:Connect(startResize)
+		resizeHandle.MouseEnter:Connect(function()
+			hovering = true
+			refreshGrip()
+		end)
+		resizeHandle.MouseLeave:Connect(function()
+			hovering = false
+			refreshGrip()
+		end)
+
+		function WindowFunctions:SetResizable(State)
+			resizeHandle.Visible = State and true or false
+			if not State then
+				stopResize()
+			end
+		end
+
+		function WindowFunctions:GetResizable()
+			return resizeHandle.Visible
+		end
+	end
 
 	function WindowFunctions:UpdateTitle(NewTitle)
 		title.Text = tostring(NewTitle or "")
@@ -1584,6 +1816,8 @@ function MacLib:Window(Settings)
 
 			elementsScrolling.Parent = elements1
 
+			BindResponsiveColumns(elementsScrolling, elementsScrollingUIListLayout, left, right, baseUIScale)
+
 			function TabFunctions:Section(Settings)
 				Settings = Settings or {}
 				local SectionFunctions = {}
@@ -2084,14 +2318,16 @@ function MacLib:Window(Settings)
 						local sliderNameWidth = sliderName.AbsoluteSize.X
 						local totalWidth = sliderElements.AbsoluteSize.X
 
-						local scale = math.max(baseUIScale.Scale, 0.01)
-						local newBarWidth = math.max(20, (totalWidth - (padding + sliderValueWidth + sliderNameWidth + 20)) / scale)
+						local scale = GetScale(baseUIScale)
+						local newBarWidth = math.max(20, (totalWidth - sliderValueWidth - sliderNameWidth) / scale - padding - 20)
 						sliderBar.Size = UDim2.new(0, newBarWidth, sliderBar.Size.Y.Scale, sliderBar.Size.Y.Offset)
 					end
 
+					LimitNameWidth(slider, sliderName, 141, baseUIScale)
 					updateSliderBarSize()
 
 					sliderName:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateSliderBarSize)
+					sliderElements:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateSliderBarSize)
 					section:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateSliderBarSize)
 
 					function SliderFunctions:UpdateName(Name)
@@ -2238,8 +2474,10 @@ function MacLib:Window(Settings)
 						Constraint.MaxSize = Vector2.new(maxWidth, 9e9)
 					end
 
+					LimitNameWidth(Input, InputName, 80, baseUIScale)
 					checkSize()
 					InputName:GetPropertyChangedSignal("AbsoluteSize"):Connect(checkSize)
+					Input:GetPropertyChangedSignal("AbsoluteSize"):Connect(checkSize)
 
 					InputBox.FocusLost:Connect(function()
 						local inputText = InputBox.Text
@@ -2314,6 +2552,7 @@ function MacLib:Window(Settings)
 					keybindName.BorderSizePixel = 0
 					keybindName.Position = UDim2.fromScale(0, 0.5)
 					keybindName.Parent = keybind
+					LimitNameWidth(keybind, keybindName, 90, baseUIScale)
 
 					local binderBox = Instance.new("TextBox")
 					binderBox.Name = "BinderBox"
@@ -3051,6 +3290,7 @@ function MacLib:Window(Settings)
 					colorpickerName.BorderSizePixel = 0
 					colorpickerName.Position = UDim2.fromScale(0, 0.5)
 					colorpickerName.Parent = colorpicker
+					LimitNameWidth(colorpicker, colorpickerName, 40, baseUIScale)
 
 					local colorCbg = Instance.new("ImageLabel")
 					colorCbg.Name = "NewColor"
@@ -3109,6 +3349,7 @@ function MacLib:Window(Settings)
 					colorPicker.BorderSizePixel = 0
 					colorPicker.Size = UDim2.fromScale(1, 1)
 					colorPicker.Visible = false
+					colorPicker.ZIndex = 4
 
 					local baseUICorner = Instance.new("UICorner")
 					baseUICorner.Name = "BaseUICorner"
@@ -4020,42 +4261,41 @@ function MacLib:Window(Settings)
 						modifierInputs.Hex.Text = hexColor
 					end
 
+					local function UpdateSlideFromValue(value)
+						local alphaPos = 1 - value
+						slide.Position = UDim2.new(alphaPos, -alphaPos * slide.Size.X.Offset, 0.5, 0)
+					end
+
 					local function UpdateSlide(iX)
-						local rY = iX - slider.AbsolutePosition.X
-						local cY = math.clamp(rY, 0, slider.AbsoluteSize.X - slide.AbsoluteSize.X)
-						slide.Position = udim2(0, cY, 0.5, 0)
-						value = 1 - (cY / (slider.AbsoluteSize.X - slide.AbsoluteSize.X))
+						local range = slider.AbsoluteSize.X - slide.AbsoluteSize.X
+						if range <= 0 then return end
+						local cY = math.clamp(iX - slider.AbsolutePosition.X, 0, range)
+						value = 1 - (cY / range)
+						UpdateSlideFromValue(value)
 						update()
 					end
 
 					local function UpdateRing(iX, iY)
-						local r = wheel.AbsoluteSize.x / 2
+						local r = wheel.AbsoluteSize.X / 2
+						if r <= 0 then return end
 						local d = v2(iX, iY) - wheel.AbsolutePosition - wheel.AbsoluteSize / 2
 
 						if d:Dot(d) > r * r then
 							d = d.unit * r
 						end
 
-						ring.Position = udim2(0.5, d.x, 0.5, d.y)
+						ring.Position = udim2(0.5 + d.x / (r * 2), 0, 0.5 + d.y / (r * 2), 0)
 						local phi, len = toPolar(d * v2(1, -1))
 						hue, saturation = radToDeg(phi) / 360, math.clamp(len / r, 0, 1)
 						slider.BackgroundColor3 = fromHSV(hue, saturation, 1)
 						update()
 					end
 
-					local function UpdateSlideFromValue(value)
-						local cY = (1 - value) * (slider.AbsoluteSize.X - slide.AbsoluteSize.X)
-						slide.Position = UDim2.new(0, cY, 0.5, 0)
-					end
-
 					local function UpdateRingFromHSV(hue, saturation)
-						local r = wheel.AbsoluteSize.X / 2
 						local phi = degToRad(hue * 360)
-						local len = saturation * r
-						local x = len * math.cos(phi)
-						local y = len * math.sin(phi)
+						local len = saturation / 2
 
-						ring.Position = UDim2.new(0.5, -x, 0.5, y)
+						ring.Position = UDim2.fromScale(0.5 - len * math.cos(phi), 0.5 + len * math.sin(phi))
 						slider.BackgroundColor3 = fromHSV(hue, saturation, 1)
 					end
 
@@ -4200,16 +4440,19 @@ function MacLib:Window(Settings)
 					local function transition(isIn)
 						local canvas = makeCanvas()
 						local tweenTransparency = isIn and 0 or 1
-						local tweenScale = isIn and 1 or 0.95
 						local stateTransparency = isIn and 1 or 0
 						local tweenInfo = TweenInfo.new(0.1, Enum.EasingStyle.Sine)
 						local canvasTween = Tween(canvas, tweenInfo, { GroupTransparency = tweenTransparency })
-						local scaleTween = Tween(promptUIScale, tweenInfo, { Scale = tweenScale })
 
 						colorPicker.Visible = true
 						colorPicker.Parent = canvas
 						canvas.Visible = true
 						canvas.GroupTransparency = stateTransparency
+						if isIn then
+							RunService.Heartbeat:Wait()
+						end
+						local fit = GetPromptFit(base, prompt, baseUIScale, promptUIScale)
+						local scaleTween = Tween(promptUIScale, tweenInfo, { Scale = isIn and fit or fit * 0.95 })
 						canvasTween:Play()
 						scaleTween:Play()
 						canvasTween.Completed:Wait()
@@ -5044,6 +5287,7 @@ function MacLib:Window(Settings)
 		dialogCanvas.BorderSizePixel = 0
 		dialogCanvas.Size = UDim2.fromScale(1, 1)
 		dialogCanvas.GroupTransparency = 1
+		dialogCanvas.ZIndex = 4
 		dialogCanvas.Parent = base
 
 		local dialog = Instance.new("Frame")
@@ -5053,6 +5297,7 @@ function MacLib:Window(Settings)
 		dialog.BorderColor3 = Color3.fromRGB(0, 0, 0)
 		dialog.BorderSizePixel = 0
 		dialog.Size = UDim2.fromScale(1, 1)
+		dialog.ZIndex = 4
 
 		local dialogUICorner = Instance.new("UICorner")
 		dialogUICorner.Name = "BaseUICorner"
@@ -5185,12 +5430,14 @@ function MacLib:Window(Settings)
 		local canvasIn = Tween(dialogCanvas, TweenInfo.new(0.1, Enum.EasingStyle.Sine), { GroupTransparency = 0 })
 		local canvasOut = Tween(dialogCanvas, TweenInfo.new(0.1, Enum.EasingStyle.Sine), { GroupTransparency = 1 })
 
-		local scaleIn = Tween(promptUIScale, TweenInfo.new(0.1, Enum.EasingStyle.Sine), { Scale = 1 })
-		local scaleOut = Tween(promptUIScale, TweenInfo.new(0.1, Enum.EasingStyle.Sine), { Scale = 0.95 })
+		local function tweenPrompt(multiplier)
+			local fit = GetPromptFit(base, prompt, baseUIScale, promptUIScale)
+			Tween(promptUIScale, TweenInfo.new(0.1, Enum.EasingStyle.Sine), { Scale = fit * multiplier }):Play()
+		end
 
 		local function dialogIn()
 			canvasIn:Play()
-			scaleIn:Play()
+			tweenPrompt(1)
 			canvasIn.Completed:Wait()
 			dialog.Parent = base
 		end
@@ -5199,7 +5446,7 @@ function MacLib:Window(Settings)
 			if not dialog.Parent then return end
 			dialog.Parent = dialogCanvas
 			canvasOut:Play()
-			scaleOut:Play()
+			tweenPrompt(0.95)
 			canvasOut.Completed:Wait()
 			dialogCanvas:Destroy()
 		end
@@ -5765,6 +6012,8 @@ function MacLib:Demo()
 		Title = "Maclib Demo",
 		Subtitle = "This is a subtitle.",
 		Size = UDim2.fromOffset(868, 650),
+		Resizable = true,
+		MinSize = Vector2.new(360, 260),
 		DragStyle = 1,
 		DisabledWindowControls = {},
 		ShowUserInfo = true,
